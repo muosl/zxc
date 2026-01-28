@@ -267,6 +267,24 @@
             margin: 10px 0;
             display: none;
         }
+        
+        /* إضافة نمط لرسالة كثرة الطلبات */
+        .rate-limit-message {
+            background: rgba(255, 152, 0, 0.1);
+            border: 1px solid #ff9800;
+            color: #ffcc80;
+            padding: 12px;
+            border-radius: 10px;
+            margin: 15px 0;
+            text-align: center;
+            font-weight: bold;
+            animation: fadeIn 0.3s ease;
+        }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(-10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
     </style>
 </head>
 <body>
@@ -276,6 +294,7 @@
     </div>
     
     <div class="error-message" id="errorMessage"></div>
+    <div class="rate-limit-message" id="rateLimitMessage" style="display: none;">طلبات كثيرة يرجى المحاولة لاحقا</div>
     
     <div class="container">
         <div class="header">
@@ -337,7 +356,8 @@
             loadingOverlay: document.getElementById('loadingOverlay'),
             loadingText: document.getElementById('loadingText'),
             errorMessage: document.getElementById('errorMessage'),
-            resultMessage: document.getElementById('resultMessage')
+            resultMessage: document.getElementById('resultMessage'),
+            rateLimitMessage: document.getElementById('rateLimitMessage')
         };
         
         const ctx = elements.wheel.getContext('2d');
@@ -349,6 +369,7 @@
         let currentRotation = 0;
         let timerInterval = null;
         let wheelImage = null;
+        let isRateLimited = false;
         
         // --- وظائف الواجهة --- //
         const showLoading = (text) => {
@@ -366,6 +387,25 @@
             setTimeout(() => {
                 elements.errorMessage.style.display = 'none';
             }, 5000);
+        };
+        
+        // دالة لعرض رسالة كثرة الطلبات
+        const showRateLimitMessage = () => {
+            isRateLimited = true;
+            elements.rateLimitMessage.style.display = 'block';
+            elements.spinBtn.disabled = true;
+            elements.spinBtn.textContent = "معلق مؤقتاً";
+            elements.statusEl.textContent = "تم تجاوز الحد المسموح";
+            
+            // إخفاء الرسالة بعد 5 ثواني
+            setTimeout(() => {
+                hideRateLimitMessage();
+            }, 5000);
+        };
+        
+        const hideRateLimitMessage = () => {
+            isRateLimited = false;
+            elements.rateLimitMessage.style.display = 'none';
         };
         
         // -- وظائف العجلة (باستخدام Canvas) --
@@ -403,6 +443,12 @@
                     ctx.save();
                     ctx.translate(centerX, centerY);
                     ctx.rotate(angle + Math.PI / 2);
+                    
+                    // إنشاء مسار دائري للصورة (جعلها مدورة)
+                    ctx.beginPath();
+                    ctx.arc(0, 0, imgSize/2, 0, Math.PI * 2);
+                    ctx.closePath();
+                    ctx.clip(); // تطبيق القص لجعل الصورة دائرية
                     
                     // رسم الصورة بدلاً من النص
                     ctx.drawImage(wheelImage, -imgSize/2, -imgSize/2, imgSize, imgSize);
@@ -483,16 +529,23 @@
             hideLoading();
             
             if (data) {
-                updateUI(data.canSpin, data.lastTime);
+                if (data.error && data.error.includes("rate limit")) {
+                    // إذا كان هناك مشكلة في كثرة الطلبات
+                    showRateLimitMessage();
+                    updateUI(false, null, true);
+                } else {
+                    updateUI(data.canSpin, data.lastTime, false);
+                }
             } else {
-                // في حالة فشل الاتصال، اسمح بالتدوير لتجنب حظر المستخدم
-                updateUI(true, null);
+                // في حالة فشل الاتصال، لا نسمح بالتدوير ونظهر رسالة
+                showRateLimitMessage();
+                updateUI(false, null, true);
             }
         };
         
         // --- وظائف منطق اللعبة --- //
         const spin = async () => {
-            if (isSpinning || !canSpin) return;
+            if (isSpinning || !canSpin || isRateLimited) return;
             
             isSpinning = true;
             // تعطيل الزر فورًا
@@ -530,7 +583,7 @@
                 elements.resultMessage.textContent = "حدث خطأ أثناء حفظ نتيجتك. يرجى المحاولة مرة أخرى.";
                 showResult(finalPrize);
                 // السماح للمستخدم بالمحاولة مرة أخرى
-                updateUI(true, null);
+                updateUI(true, null, false);
             }
         };
         
@@ -554,7 +607,7 @@
         const closeResult = () => {
             elements.resultPopup.classList.remove('show');
             setTimeout(() => {
-                updateUI(false, new Date().getTime());
+                updateUI(false, new Date().getTime(), false);
                 if (window.Telegram && window.Telegram.WebApp) {
                     window.Telegram.WebApp.close();
                 }
@@ -562,8 +615,17 @@
         };
         
         // -- وظائف تحديث الواجهة -- //
-        const updateUI = (canSpinNow, lastTime) => {
+        const updateUI = (canSpinNow, lastTime, isRateLimitedNow = false) => {
             canSpin = canSpinNow;
+            
+            if (isRateLimitedNow) {
+                elements.spinBtn.disabled = true;
+                elements.spinBtn.textContent = "معلق مؤقتاً";
+                elements.statusEl.textContent = "تم تجاوز الحد المسموح";
+                elements.timerEl.textContent = "";
+                if (timerInterval) clearInterval(timerInterval);
+                return;
+            }
             
             if (canSpinNow) {
                 elements.spinBtn.disabled = false;
@@ -589,7 +651,7 @@
                 
                 if (timeLeft <= 0) {
                     clearInterval(timerInterval);
-                    updateUI(true, null);
+                    updateUI(true, null, false);
                     return;
                 }
                 
@@ -629,6 +691,7 @@
             } catch (error) {
                 console.error('Initialization failed.', error);
                 showError("فشل في تهيئة التطبيق.");
+                showRateLimitMessage();
             } finally {
                 hideLoading();
             }
